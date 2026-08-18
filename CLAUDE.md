@@ -74,6 +74,8 @@ lib/          Framework-free logic. No JSX, unit-testable in plain Node.
 content/      Authored copy: lessons, challenges, onboarding strings. Data only.
 constants/    Design tokens. `brand.ts` is the single source of truth.
 assets/       Images and fonts.
+docs/         Reference material for building: briefs, research, design notes.
+              Read it when relevant; never bundled into the app.
 ```
 
 `lib/` never imports from `app/`. Only `constants/brand.ts` contains hex values.
