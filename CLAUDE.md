@@ -273,3 +273,19 @@ Two requirements are **not** met yet, and neither can be met from Expo Go:
 - Imports use the `@/` alias.
 - Tone of voice: plain, warm, never clinical, never scolding. The user is an
   adult making a choice, not a patient.
+
+### Commit messages
+
+Every commit subject is `Step X.Y: one-line description`, where `X.Y` is the
+step number from
+[`docs/mesura-build-playbook.md`](docs/mesura-build-playbook.md). The playbook's
+prompts are pasted in verbatim, so the step is found by matching the prompt you
+were given against its `Prompt X.Y` block — not by guessing from the diff.
+
+Work that is not itself a step — a bug fix, a doc, a piece of housekeeping —
+takes the number of the step it belongs to. Several commits sharing a number is
+normal and correct; a commit with no number is not. If nothing plausibly fits,
+ask rather than inventing one.
+
+The body is prose explaining **why**, not a list of what changed. The diff
+already says what changed.
