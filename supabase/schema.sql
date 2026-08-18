@@ -21,6 +21,8 @@ create table if not exists public.profiles (
                             check (goal_mode in ('cut_back', 'alcohol_free')),
   weekly_target integer     not null default 8
                             check (weekly_target between 0 and 100),
+  baseline_drinks integer   not null default 0
+                            check (baseline_drinks between 0 and 100),
   drink_cost    numeric(10, 2) not null default 0
                             check (drink_cost >= 0),
   timezone      text        not null default 'UTC',
@@ -30,6 +32,20 @@ create table if not exists public.profiles (
 
 comment on table public.profiles is
   'One row per user. Holds the weekly number the whole product is built around.';
+
+-- `baseline_drinks` was added after the first release of this file, so it is
+-- declared twice: once above for a fresh project, and once here for a project
+-- whose `profiles` already existed and therefore skipped the create entirely.
+-- This alter has to come before anything that names the column — on an
+-- existing database it is the statement that puts the column there.
+alter table public.profiles
+  add column if not exists baseline_drinks integer not null default 0
+    check (baseline_drinks between 0 and 100);
+
+comment on column public.profiles.baseline_drinks is
+  'What the user drank in a normal week before Mesura. The money counter is
+   (baseline_drinks - actual) * drink_cost, so 0 simply means "not answered yet"
+   and the counter stays at zero rather than inventing a saving.';
 
 create table if not exists public.drink_logs (
   id         uuid primary key default gen_random_uuid(),

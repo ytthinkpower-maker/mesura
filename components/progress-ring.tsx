@@ -1,7 +1,23 @@
+import { useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  Easing,
+  useAnimatedProps,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 
 import { BrandColor, BrandSpace, BrandType } from '@/constants/brand';
+
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+
+/**
+ * Long enough to read as movement, short enough that a second drink logged
+ * straight after does not feel like waiting. Eased out, never bounced: the
+ * reward here is calm, not a confetti cannon.
+ */
+const FILL_DURATION_MS = 700;
 
 export type ProgressRingProps = {
   /** Drinks logged so far this week. */
@@ -36,8 +52,11 @@ function arcPath(center: number, radius: number, startAngle: number, endAngle: n
 
 /**
  * The weekly number, drawn as a ring with an open gap at the top.
- * Fills in spruce — including when the week is won — and only turns rose
- * once the user is over target.
+ *
+ * Fills in spruce — including when the week is won — and only turns rose once
+ * the user is over target. The fill is one path drawn to full length and
+ * revealed by its dash offset, which is what lets it animate smoothly instead
+ * of being re-cut on every render.
  */
 export function ProgressRing({
   current,
@@ -56,9 +75,25 @@ export function ProgressRing({
   const isOver = ratio > 1;
   const filled = Math.max(0, Math.min(ratio, 1));
 
-  const trackPath = arcPath(center, radius, startAngle, startAngle + sweep);
-  const progressPath =
-    filled > 0 ? arcPath(center, radius, startAngle, startAngle + sweep * filled) : null;
+  const path = arcPath(center, radius, startAngle, startAngle + sweep);
+  const arcLength = radius * ((sweep * Math.PI) / 180);
+
+  /**
+   * Starts empty on every mount so the first paint after the week loads is the
+   * ring filling, rather than a ring that was already full.
+   */
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    progress.value = withTiming(filled, {
+      duration: FILL_DURATION_MS,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [filled, progress]);
+
+  const animatedProps = useAnimatedProps(() => ({
+    strokeDashoffset: arcLength * (1 - progress.value),
+  }));
 
   return (
     <View
@@ -68,21 +103,21 @@ export function ProgressRing({
       style={{ width: size, height: size }}>
       <Svg width={size} height={size}>
         <Path
-          d={trackPath}
+          d={path}
           stroke={BrandColor.spruceSoft}
           strokeWidth={strokeWidth}
           strokeLinecap="round"
           fill="none"
         />
-        {progressPath ? (
-          <Path
-            d={progressPath}
-            stroke={isOver ? BrandColor.rose : BrandColor.spruce}
-            strokeWidth={strokeWidth}
-            strokeLinecap="round"
-            fill="none"
-          />
-        ) : null}
+        <AnimatedPath
+          d={path}
+          stroke={isOver ? BrandColor.rose : BrandColor.spruce}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          fill="none"
+          strokeDasharray={[arcLength, arcLength]}
+          animatedProps={animatedProps}
+        />
       </Svg>
       <View style={[StyleSheet.absoluteFill, styles.center]}>
         {children ?? (

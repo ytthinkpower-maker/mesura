@@ -24,6 +24,8 @@ export type Profile = {
   id: string;
   goal_mode: GoalMode;
   weekly_target: number;
+  /** A normal week before Mesura. 0 means "not answered yet". */
+  baseline_drinks: number;
   drink_cost: number;
   timezone: string;
   created_at: string;

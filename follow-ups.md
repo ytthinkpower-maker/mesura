@@ -60,13 +60,27 @@ here is broken today — but everything below is waiting on it.
 
 ## Product surface still unbuilt
 
-- [ ] **Drink logging.** The Today tab is hard-coded — replace `DEMO_CURRENT` and
-      `DEMO_TARGET` in `app/(tabs)/index.tsx` with real reads and writes against
-      `drink_logs`. Until this exists, the data export legitimately returns empty
-      arrays for everything but `profiles`.
-- [ ] Urge logging against `urge_logs`, including the urge-survived credit.
+- [ ] **Nothing writes `weekly_target`, `baseline_drinks`, or `drink_cost`.**
+      Today reads all three and draws the ring, the status line, and the money
+      counter from them, but the only way to set them is
+      [`supabase/seed-dev.sql`](supabase/seed-dev.sql) by hand. Onboarding (PRD
+      §4) is the real answer; a Settings editor is the cheap one. Until then a
+      real new user sees a default 8-drink target and `$0` saved.
 - [ ] Settings: weekly limit, drink sizes, reminders — the "Your week" card is a
       placeholder.
+- [ ] **The Today lesson teaser has nowhere to go.** It routes to the Lessons
+      tab, which still shows its own hard-coded sample rather than the lesson
+      the teaser named. Needs the lesson reader, reading
+      [`content/lessons.ts`](content/lessons.ts) and writing `lesson_progress`.
+- [ ] **Urge toolkit** (PRD §4): the 90-second breathing timer, the trigger
+      prompt, swap suggestions. `urge_logs.trigger_note` is therefore always
+      null — the sheet logs the outcome and nothing else, deliberately, because
+      typing is what the 5-second loop cannot afford.
+- [ ] **Streak fairness** (PRD §4): 48-hour backfill, edit/delete an entry, one
+      streak repair a week. Right now a drink can only be logged at the moment
+      it happens and can never be corrected, which is the top rage-uninstall
+      driver in this category.
+- [ ] Plan tonight and close the day (PRD §4).
 - [ ] History, Lessons, and Challenge tabs are all `PlaceholderScreen`.
 - [ ] Onboarding quiz, including the §9 safety screen for heavy-use patterns.
 - [ ] Delete `components/placeholder-screen.tsx` once no route imports it.
@@ -81,6 +95,26 @@ here is broken today — but everything below is waiting on it.
       PRD, which specifies email and Apple only. Recommendation: revisit after
       the bundle identifier exists, when the redirect becomes a stable
       `mesura://`.
+
+## Known limits in the weekly number
+
+None of these are wrong enough to block anything, and all of them are invisible
+until the app has been used for a while.
+
+- [ ] **The streak scores past weeks against the _current_ target.** Lower your
+      number today and last month's weeks are re-judged against it, possibly
+      shortening a streak the user already earned. Fixing it needs the target
+      stored per week — which History wants anyway.
+- [ ] **`streakFrom` pulls a year of `drink_logs` on every focus of Today.** Two
+      queries and a few hundred rows today, which is fine; it becomes a Postgres
+      aggregate the moment accounts are old enough for that to be a real page.
+- [ ] **Money is formatted as USD**, because `profiles` has no currency column.
+      `drink_cost` is just a number, so a user in euros sees their own figure
+      with the wrong symbol in front of it. Add `currency` alongside the
+      onboarding question that sets `drink_cost`.
+- [ ] **The date line does not tick over at midnight** while the app sits open
+      on Today. It refreshes on focus, which covers everything except leaving
+      the screen open across midnight.
 
 ## Smaller things
 
