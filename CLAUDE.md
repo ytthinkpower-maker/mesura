@@ -58,6 +58,11 @@ Secrets live in `.env`, which is git-ignored along with every other env file and
 key format (see `.gitignore`). `.env.example` is the only committed template.
 Never put a token, key, or account id in tracked source.
 
+The Expo CLI loads `.env` automatically, but only variables prefixed
+`EXPO_PUBLIC_` are inlined into the app bundle. Anything secret must therefore
+**never** carry that prefix — `GITHUB_TOKEN` is read by `scripts/push.js` on
+your machine and never reaches the bundle.
+
 ---
 
 ## Folder structure
