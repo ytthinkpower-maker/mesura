@@ -72,10 +72,17 @@ const helper = `!f() { echo username=${owner}; echo "password=$GITHUB_TOKEN"; };
 console.log(`Pushing ${branch} to ${owner}/${repo} ...`);
 
 try {
-  git(['-c', `credential.helper=${helper}`, 'push', '-u', 'origin', `${branch}:${branch}`], {
-    stdio: 'inherit',
-    env: { ...process.env, GITHUB_TOKEN: token, GIT_TERMINAL_PROMPT: '0' },
-  });
+  // Not routed through git() above: with stdio 'inherit' there is nothing to
+  // capture, so the return value must not be treated as a string.
+  execFileSync(
+    'git',
+    ['-c', `credential.helper=${helper}`, 'push', '-u', 'origin', `${branch}:${branch}`],
+    {
+      cwd: ROOT,
+      stdio: 'inherit',
+      env: { ...process.env, GITHUB_TOKEN: token, GIT_TERMINAL_PROMPT: '0' },
+    }
+  );
 } catch {
   fail(
     [
