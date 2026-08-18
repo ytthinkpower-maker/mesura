@@ -171,8 +171,9 @@ Type tokens: `numeric` (48, reserved for the weekly number) · `display` (32) ·
 | `AuthProvider`      | `components/auth-provider.tsx`      | Session state + `useAuth()`. Holds the password-recovery flag the router gates on                                        |
 | `SecondaryButton`   | `components/secondary-button.tsx`   | Outlined spruce pill, same size as `PrimaryButton`. Only where two actions are genuinely equal                           |
 | `Sheet`             | `components/sheet.tsx`              | Bottom panel built on the platform `Modal`. Tap outside to close. No sheet library, no gestures                          |
-| `LogDrinkSheet`     | `components/log-drink-sheet.tsx`    | Three one-tap drink types + "Something else". One tap logs and the sheet closes itself                                   |
-| `UrgeSheet`         | `components/urge-sheet.tsx`         | Rode it out / had one. Both outcomes are logged; riding it out is the win                                                |
+| `LogDrinkSheet`     | `components/log-drink-sheet.tsx`    | `Sheet` + `DrinkTypePicker`. One tap logs and the sheet closes itself                                                    |
+| `DrinkTypePicker`   | `components/drink-type-picker.tsx`  | Three one-tap types + "Something else". Shared by the log sheet and Urge SOS so logging is one gesture everywhere        |
+| `BreathingCircle`   | `components/breathing-circle.tsx`   | 4s in / 4s hold / 6s out. Takes `phase` from its parent — one clock drives the circle, the label, and the countdown      |
 
 ---
 
@@ -187,6 +188,31 @@ Five tabs, defined in `app/(tabs)/`:
 | Lessons   | `lessons.tsx`   | Short reads, serif body. _Placeholder + sample_         |
 | Challenge | `challenge.tsx` | Commit to a number, build a streak. _Placeholder_       |
 | Settings  | `settings.tsx`  | Account, export, delete. **Real.** Limits still pending |
+
+One route lives outside the tabs:
+
+| Route   | File           | Purpose                                                         |
+| ------- | -------------- | --------------------------------------------------------------- |
+| `/urge` | `app/urge.tsx` | Urge SOS, a `fullScreenModal` presented over the tabs. **Real** |
+
+### Urge SOS
+
+The emotional core: the one screen that rewards something the user does _not_
+do. It has to read as a deep breath, not a form — the breathing circle is the
+subject, the trigger note is unlabelled and optional, and the exit that ends in
+a drink is exactly as quiet and unpunished as the one that does not.
+
+- **Both outcomes are logged.** A tally of urges survived is only true if the
+  urges that were not survived are counted too, so "I had the drink" writes an
+  `urge_logs` row as well as a `drink_logs` row.
+- **The outcome is `survived`, not `rode_it_out`.** The build playbook's prompt
+  says the latter, but `urge_logs.outcome` carries a check constraint allowing
+  only `survived` / `drank`, and that constraint is already live in `mesura-dev`
+  and baked into the export format. The schema wins.
+- **The screen computes the breath phase, not the circle.** The label and the
+  animation come off one clock, recomputed each tick from a start timestamp, so
+  neither drifts: a circle contracting under the word "Hold" is worse than no
+  guide at all.
 
 ### The weekly number
 

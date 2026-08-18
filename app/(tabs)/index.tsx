@@ -19,15 +19,13 @@ import { PrimaryButton } from '@/components/primary-button';
 import { ProgressRing } from '@/components/progress-ring';
 import { SecondaryButton } from '@/components/secondary-button';
 import { StatTile } from '@/components/stat-tile';
-import { UrgeSheet } from '@/components/urge-sheet';
 import { lessonForDay } from '@/content/lessons';
 import { BrandColor, BrandSpace, BrandType } from '@/constants/brand';
-import type { DrinkType, UrgeOutcome } from '@/lib/database.types';
+import type { DrinkType } from '@/lib/database.types';
 import {
   formatMoney,
   loadWeekSnapshot,
   logDrink,
-  logUrge,
   moneySaved,
   weekStatus,
   type WeekSnapshot,
@@ -39,7 +37,6 @@ export default function TodayScreen() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [drinkSheetOpen, setDrinkSheetOpen] = useState(false);
-  const [urgeSheetOpen, setUrgeSheetOpen] = useState(false);
 
   /**
    * Drinks logged on this device that the server has not confirmed yet. The
@@ -86,24 +83,6 @@ export default function TodayScreen() {
     // the drink that is now in the freshly loaded snapshot.
     await load();
     setPendingDrinks((count) => count - 1);
-  }
-
-  async function handleUrge(outcome: UrgeOutcome) {
-    const result = await logUrge(outcome);
-    if (!result.ok) {
-      Alert.alert('Not logged', result.message);
-      return;
-    }
-
-    if (outcome === 'survived') {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await load();
-      return;
-    }
-
-    // They had one. The drink still needs logging, so go straight there.
-    await load();
-    setDrinkSheetOpen(true);
   }
 
   if (!snapshot) {
@@ -175,7 +154,17 @@ export default function TodayScreen() {
 
         <View style={styles.actions}>
           <PrimaryButton label="Log a drink" onPress={() => setDrinkSheetOpen(true)} />
-          <SecondaryButton label="Urge" onPress={() => setUrgeSheetOpen(true)} />
+          <SecondaryButton
+            label="Urge"
+            onPress={() =>
+              router.push({
+                pathname: '/urge',
+                // Handed over so Urge SOS never has to show a spinner in the
+                // one moment where waiting is its own small failure.
+                params: { quickTypes: quickTypes.join(',') },
+              })
+            }
+          />
           {urgesSurvived > 0 ? (
             <Text style={styles.urgeTally}>
               {urgesSurvived} {urgesSurvived === 1 ? 'urge' : 'urges'} ridden out
@@ -202,12 +191,6 @@ export default function TodayScreen() {
         onClose={() => setDrinkSheetOpen(false)}
         quickTypes={quickTypes}
         onSelect={(drinkType) => void handleLogDrink(drinkType)}
-      />
-
-      <UrgeSheet
-        visible={urgeSheetOpen}
-        onClose={() => setUrgeSheetOpen(false)}
-        onSelect={(outcome) => void handleUrge(outcome)}
       />
     </SafeAreaView>
   );

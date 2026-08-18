@@ -72,15 +72,15 @@ here is broken today — but everything below is waiting on it.
       tab, which still shows its own hard-coded sample rather than the lesson
       the teaser named. Needs the lesson reader, reading
       [`content/lessons.ts`](content/lessons.ts) and writing `lesson_progress`.
-- [ ] **Urge toolkit** (PRD §4): the 90-second breathing timer, the trigger
-      prompt, swap suggestions. `urge_logs.trigger_note` is therefore always
-      null — the sheet logs the outcome and nothing else, deliberately, because
-      typing is what the 5-second loop cannot afford.
 - [ ] **Streak fairness** (PRD §4): 48-hour backfill, edit/delete an entry, one
       streak repair a week. Right now a drink can only be logged at the moment
       it happens and can never be corrected, which is the top rage-uninstall
       driver in this category.
 - [ ] Plan tonight and close the day (PRD §4).
+- [ ] **Urge SOS has no audio and no timer persistence.** Leaving the screen
+      and coming back restarts the ninety seconds, and backgrounding the app
+      pauses nothing. Fine for a screen meant to be looked at; worth revisiting
+      only if the breathing guide grows an audio track.
 - [ ] History, Lessons, and Challenge tabs are all `PlaceholderScreen`.
 - [ ] Onboarding quiz, including the §9 safety screen for heavy-use patterns.
 - [ ] Delete `components/placeholder-screen.tsx` once no route imports it.

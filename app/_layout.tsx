@@ -54,6 +54,14 @@ function RootNavigator() {
     <Stack screenOptions={{ contentStyle: { backgroundColor: BrandColor.paper } }}>
       <Stack.Protected guard={signedIn}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        {/*
+          Urge SOS covers the tabs completely: the point of the screen is that
+          nothing else is competing for attention while an urge passes.
+        */}
+        <Stack.Screen
+          name="urge"
+          options={{ headerShown: false, presentation: 'fullScreenModal' }}
+        />
       </Stack.Protected>
 
       <Stack.Protected guard={!signedIn}>

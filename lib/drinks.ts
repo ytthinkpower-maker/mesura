@@ -296,15 +296,27 @@ export async function logDrink(drinkType: DrinkType, quantity = 1): Promise<Writ
   return { ok: true };
 }
 
-/** Records an urge, whichever way it went. Riding one out is a logged win. */
-export async function logUrge(outcome: UrgeOutcome): Promise<WriteResult> {
+/** The column caps the note at 500 characters; trim rather than let it fail. */
+const MAX_TRIGGER_NOTE = 500;
+
+/**
+ * Records an urge, whichever way it went. Riding one out is a logged win.
+ *
+ * The note is optional in every sense: blank is stored as null, and a write
+ * that would fail on length is trimmed rather than rejected. Nobody should
+ * lose a logged win to a validation error in the middle of an urge.
+ */
+export async function logUrge(outcome: UrgeOutcome, triggerNote?: string): Promise<WriteResult> {
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return { ok: false, message: 'You need to be signed in to log an urge.' };
+
+  const note = triggerNote?.trim().slice(0, MAX_TRIGGER_NOTE);
 
   const { error } = await supabase.from('urge_logs').insert({
     user_id: userData.user.id,
     logged_at: new Date().toISOString(),
     outcome,
+    trigger_note: note ? note : null,
   });
 
   if (error) return { ok: false, message: 'That did not save. Try again.' };
