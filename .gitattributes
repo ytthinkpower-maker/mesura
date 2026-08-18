@@ -1,0 +1,7 @@
+# Keep line endings LF everywhere; Prettier is configured with endOfLine: lf.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ttf binary
+*.otf binary
