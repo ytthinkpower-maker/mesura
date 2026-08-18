@@ -63,14 +63,29 @@ The Expo CLI loads `.env` automatically, but only variables prefixed
 **never** carry that prefix — `GITHUB_TOKEN` is read by `scripts/push.js` on
 your machine and never reaches the bundle.
 
+Environments are split by file, and Expo picks one by mode:
+
+| File               | Loaded by                 | Supabase project |
+| ------------------ | ------------------------- | ---------------- |
+| `.env`             | always, both modes        | —                |
+| `.env.development` | `npm start` (Expo Go)     | `mesura-dev`     |
+| `.env.production`  | `expo export`, EAS builds | `mesura-prod`    |
+
+A mode file wins over `.env` for the same variable name. Only `.env.example` is
+committed. The Supabase `service_role` key never appears in any of them.
+
 ---
 
 ## Folder structure
 
 ```
 app/          Routes only. File-based; a file here is a URL.
-components/   Reusable UI. Presentational, brand-token-driven.
-lib/          Framework-free logic. No JSX, unit-testable in plain Node.
+components/   Reusable UI. Presentational, brand-token-driven. React context
+              providers live here too, because they carry JSX.
+lib/          Framework-free logic. No JSX. `supabase.ts` is the one place the
+              client is constructed; everything else imports it from there.
+supabase/     Database schema and policies as SQL. Run by hand in the Supabase
+              SQL editor — there is no migration runner in this project.
 content/      Authored copy: lessons, challenges, onboarding strings. Data only.
 constants/    Design tokens. `brand.ts` is the single source of truth.
 assets/       Images and fonts.
@@ -142,13 +157,16 @@ Type tokens: `numeric` (48, reserved for the weekly number) · `display` (32) ·
 
 ## Components
 
-| Component           | File                                | Notes                                                                                                   |
-| ------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `PrimaryButton`     | `components/primary-button.tsx`     | The one CTA: a spruce pill. No shadow, no gradient                                                      |
-| `Card`              | `components/card.tsx`               | `surface` fill, radius 12, hairline border, `flush` prop                                                |
-| `StatTile`          | `components/stat-tile.tsx`          | Label + value + caption; `tone` is `default` / `spruce` / `over`                                        |
-| `ProgressRing`      | `components/progress-ring.tsx`      | SVG ring, takes `current` + `target`, open gap at the top, fills spruce and only turns rose past target |
-| `PlaceholderScreen` | `components/placeholder-screen.tsx` | Temporary tab body. Delete once every tab is real                                                       |
+| Component           | File                                | Notes                                                                                                                    |
+| ------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `PrimaryButton`     | `components/primary-button.tsx`     | The one CTA: a spruce pill. No shadow, no gradient                                                                       |
+| `Card`              | `components/card.tsx`               | `surface` fill, radius 12, hairline border, `flush` prop                                                                 |
+| `StatTile`          | `components/stat-tile.tsx`          | Label + value + caption; `tone` is `default` / `spruce` / `over`                                                         |
+| `ProgressRing`      | `components/progress-ring.tsx`      | SVG ring, takes `current` + `target`, open gap at the top, fills spruce and only turns rose past target                  |
+| `PlaceholderScreen` | `components/placeholder-screen.tsx` | Temporary tab body. Delete once every tab is real                                                                        |
+| `TextField`         | `components/text-field.tsx`         | Labelled input. Border turns spruce on focus, rose on error. Use `revealable` for passwords, never raw `secureTextEntry` |
+| `AuthScreen`        | `components/auth-screen.tsx`        | Shell for the signed-out screens: title, one column, keyboard-aware. Exports `AuthLink`                                  |
+| `AuthProvider`      | `components/auth-provider.tsx`      | Session state + `useAuth()`. Holds the password-recovery flag the router gates on                                        |
 
 ---
 
@@ -162,12 +180,66 @@ Five tabs, defined in `app/(tabs)/`:
 | History   | `history.tsx`   | Past weeks: set, drank, won. _Placeholder_               |
 | Lessons   | `lessons.tsx`   | Short reads, serif body. _Placeholder + sample_          |
 | Challenge | `challenge.tsx` | Commit to a number, build a streak. _Placeholder_        |
-| Settings  | `settings.tsx`  | Limit, drink sizes, reminders, data. _Placeholder_       |
+| Settings  | `settings.tsx`  | Account, export, delete. **Real.** Limits still pending  |
 
 Today currently shows a hard-coded 5-of-8 ring. Replace `DEMO_CURRENT` /
 `DEMO_TARGET` when real state lands.
 
 ---
+
+## Auth and data
+
+Supabase provides accounts and storage. The app ships only the anon key —
+**Row Level Security is what keeps one user out of another's rows**, not
+secrecy. The `service_role` key must never enter this repo.
+
+- Schema, policies, and the account-deletion function live in
+  [`supabase/schema.sql`](supabase/schema.sql). It is idempotent: paste the
+  whole file into the Supabase SQL editor and run it. When you change a table,
+  change [`lib/database.types.ts`](lib/database.types.ts) in the same commit.
+- **Recovery uses one-time codes, not emailed links.** A link has to travel
+  from Mail back into the app through a deep link, which is the most common way
+  a recovery flow strands someone — and account recovery is a headline feature.
+  Both the Supabase "Confirm signup" and "Reset password" email templates must
+  therefore contain `{{ .Token }}`, and neither should still offer
+  `{{ .ConfirmationURL }}` — a user who taps the link gets confirmed in Safari
+  while the app sits on the code screen, never learning it worked.
+- **Two constants mirror dashboard settings and must be changed in pairs.**
+  `CODE_LENGTH` in [`lib/auth.ts`](lib/auth.ts) mirrors _Email OTP length_, and
+  `MIN_PASSWORD_LENGTH` mirrors _Minimum password length_, both on the Supabase
+  Email provider. A mismatch on the first makes every valid code look wrong.
+- Routes under `app/(auth)/` are the signed-out stack. The root layout gates on
+  `Stack.Protected`; a password-recovery session counts as signed **out** until
+  the new password is saved.
+- Sessions persist in AsyncStorage, not SecureStore — SecureStore's 2048-byte
+  cap silently truncates a Supabase session and signs the user out.
+- Every table cascades from `auth.users`, so `delete_account()` removes the
+  account and all its rows in one statement.
+
+### Account deletion — two things owed before submission
+
+App Store Review Guideline 5.1.1(v) requires in-app account deletion, and
+Mesura's Settings screen satisfies the bulk of it today: the option is easy to
+find, it permanently deletes rather than deactivates, it removes every row the
+account owns, it needs no phone call or support ticket, and two confirmation
+alerts are within the "may add verification steps" allowance without being
+"unnecessarily difficult".
+
+Two requirements are **not** met yet, and neither can be met from Expo Go:
+
+1. **Sign in with Apple token revocation.** Apple requires apps offering Sign in
+   with Apple to call the [Revoke Tokens REST
+   API](https://developer.apple.com/documentation/sign_in_with_apple/revoke_tokens/)
+   when an account is deleted. That needs a Team ID, Key ID, and `.p8` private
+   key signing a `client_secret` JWT server-side — so a Supabase Edge Function,
+   never the client. It also needs `credential.authorizationCode`, which
+   [`lib/auth.ts`](lib/auth.ts) currently discards, exchanged for a refresh token
+   and stored at sign-in. **Impossible in Expo Go**, where the Apple client ID is
+   `host.exp.Exponent` and belongs to Expo, not us. Blocked until Mesura has its
+   own bundle identifier.
+2. **Subscription notice.** Once IAP lands (PRD §7), the deletion flow must tell
+   the user that billing continues through Apple and link them to manage or
+   cancel the subscription. Deleting the account does not cancel it.
 
 ## Conventions
 
