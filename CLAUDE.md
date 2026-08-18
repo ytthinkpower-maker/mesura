@@ -315,3 +315,9 @@ ask rather than inventing one.
 
 The body is prose explaining **why**, not a list of what changed. The diff
 already says what changed.
+
+**Committing is not finished until it is pushed.** The playbook's COMMIT PROMPT
+is one instruction, not two: commit, push to GitHub, confirm the push
+succeeded, and report the exact commit message used. A verified step sitting
+unpushed on one machine is not a save-point — it is the thing the save-point
+exists to prevent. Never stop at the commit and leave the push to the user.
