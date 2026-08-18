@@ -1,5 +1,7 @@
-import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Constants from 'expo-constants';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/components/auth-provider';
@@ -7,10 +9,80 @@ import { Card } from '@/components/card';
 import { BrandBorderWidth, BrandColor, BrandSpace, BrandType } from '@/constants/brand';
 import { deleteAccount, exportAccountData } from '@/lib/account';
 import { signOut } from '@/lib/auth';
+import { DEV_MENU_ENABLED, DEV_MENU_TAPS } from '@/lib/dev';
+import { REMINDER_HOUR, setEveningReminder } from '@/lib/reminders';
+import { supabase } from '@/lib/supabase';
+
+const APP_VERSION = Constants.expoConfig?.version ?? '1.0.0';
 
 export default function SettingsScreen() {
   const { session } = useAuth();
   const [busy, setBusy] = useState<'export' | 'delete' | 'signout' | null>(null);
+  const [reminder, setReminder] = useState<boolean | null>(null);
+  const [savingReminder, setSavingReminder] = useState(false);
+
+  const loadReminder = useCallback(async () => {
+    if (!session?.user.id) return;
+    const { data } = await supabase
+      .from('profiles')
+      .select('evening_reminder')
+      .eq('id', session.user.id)
+      .single();
+
+    setReminder(data?.evening_reminder ?? true);
+  }, [session?.user.id]);
+
+  // Re-read on every focus rather than once on mount. The switch is the only
+  // control for the nudge, so a screen that reads it once and then gets stuck
+  // is a reminder nobody can turn off.
+  useFocusEffect(
+    useCallback(() => {
+      void loadReminder();
+    }, [loadReminder])
+  );
+
+  /**
+   * The switch moves first and rolls back on failure. A toggle that waits for a
+   * round trip reads as broken, and this one is genuinely reversible.
+   */
+  async function handleReminder(next: boolean) {
+    const previous = reminder;
+    setReminder(next);
+    setSavingReminder(true);
+
+    const result = await setEveningReminder(next);
+    setSavingReminder(false);
+
+    if (!result.ok) {
+      setReminder(previous);
+      Alert.alert('Not saved', result.message);
+      return;
+    }
+
+    if (next && result.state === 'denied') {
+      Alert.alert(
+        'Notifications are off for Mesura',
+        'Turn them on in iOS Settings and the evening check-in will start arriving.'
+      );
+    }
+  }
+
+  /**
+   * Ten taps on the version number opens the developer menu. The counter is a
+   * ref rather than state so that tapping nine times and stopping leaves no
+   * trace and re-renders nothing.
+   */
+  const versionTaps = useRef(0);
+
+  function handleVersionTap() {
+    if (!DEV_MENU_ENABLED) return;
+
+    versionTaps.current += 1;
+    if (versionTaps.current < DEV_MENU_TAPS) return;
+
+    versionTaps.current = 0;
+    router.push('/dev-menu');
+  }
 
   async function handleExport() {
     setBusy('export');
@@ -96,9 +168,39 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Evening check-in</Text>
+          <Card flush>
+            <View style={styles.switchRow}>
+              <View style={styles.switchText}>
+                <Text style={styles.switchLabel}>Remind me at {REMINDER_HOUR}:00</Text>
+                <Text style={styles.rowCaption}>
+                  {reminder === null
+                    ? 'Checking…'
+                    : 'One tap to close the day. The only thing Mesura ever sends you.'}
+                </Text>
+              </View>
+              {/*
+                Until the profile has been read the switch shows the column's
+                own default rather than `false`. Showing "off" for a preference
+                that is on — while disabled, so it cannot be corrected — is how
+                a nightly notification becomes one the user has no way to stop.
+              */}
+              <Switch
+                value={reminder ?? true}
+                disabled={reminder === null || savingReminder}
+                onValueChange={(next) => void handleReminder(next)}
+                trackColor={{ false: BrandColor.line, true: BrandColor.spruce }}
+                ios_backgroundColor={BrandColor.line}
+                accessibilityLabel={`Evening check-in at ${REMINDER_HOUR}:00`}
+              />
+            </View>
+          </Card>
+        </View>
+
+        <View style={styles.section}>
           <Text style={styles.sectionLabel}>Your week</Text>
           <Card>
-            <Text style={styles.pendingTitle}>Limit, drink sizes, reminders</Text>
+            <Text style={styles.pendingTitle}>Limit and drink sizes</Text>
             <Text style={styles.pendingBody}>Coming in a later step.</Text>
           </Card>
         </View>
@@ -115,6 +217,14 @@ export default function SettingsScreen() {
             />
           </Card>
         </View>
+
+        <Pressable
+          accessibilityRole="text"
+          accessibilityLabel={`Mesura version ${APP_VERSION}`}
+          onPress={handleVersionTap}
+          style={styles.version}>
+          <Text style={styles.versionLabel}>Mesura {APP_VERSION}</Text>
+        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -225,6 +335,30 @@ const styles = StyleSheet.create({
   },
   pendingBody: {
     ...BrandType.body,
+    color: BrandColor.inkMuted,
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: BrandSpace.lg,
+    paddingHorizontal: BrandSpace.xl,
+    paddingVertical: BrandSpace.lg,
+    minHeight: 52,
+  },
+  switchText: {
+    flex: 1,
+    gap: BrandSpace.xs,
+  },
+  switchLabel: {
+    ...BrandType.body,
+    color: BrandColor.ink,
+  },
+  version: {
+    alignItems: 'center',
+    paddingVertical: BrandSpace.lg,
+  },
+  versionLabel: {
+    ...BrandType.caption,
     color: BrandColor.inkMuted,
   },
 });

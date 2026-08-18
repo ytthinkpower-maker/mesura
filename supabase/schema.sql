@@ -47,6 +47,14 @@ comment on column public.profiles.baseline_drinks is
    (baseline_drinks - actual) * drink_cost, so 0 simply means "not answered yet"
    and the counter stays at zero rather than inventing a saving.';
 
+alter table public.profiles
+  add column if not exists evening_reminder boolean not null default true;
+
+comment on column public.profiles.evening_reminder is
+  'Whether the nightly "close the day" nudge is wanted. Lives on the profile
+   rather than on the device so the answer survives a reinstall — the local
+   notification itself is still scheduled per device, from this flag.';
+
 create table if not exists public.drink_logs (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid        not null references auth.users (id) on delete cascade,
@@ -94,6 +102,67 @@ create table if not exists public.challenge_memberships (
   unique (user_id, challenge_slug)
 );
 
+-- The evening ritual, the plan that precedes it, and the celebrations that
+-- come out of both. All three arrived after the first release of this file, so
+-- each is guarded by `if not exists` like everything above it.
+
+-- `plan_date` and `close_date` are `date`, not `timestamptz`, on purpose. A
+-- plan is made for a calendar evening in the user's own zone; storing the
+-- instant would re-date last night's plan the moment someone flies east, and a
+-- plan that moves to a different day is worse than no plan.
+
+create table if not exists public.evening_plans (
+  id              uuid primary key default gen_random_uuid(),
+  user_id         uuid        not null references auth.users (id) on delete cascade,
+  plan_date       date        not null,
+  intended_drinks integer     not null check (intended_drinks between 0 and 50),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  unique (user_id, plan_date)
+);
+
+comment on table public.evening_plans is
+  'One intended drink count per evening. The plan-vs-actual comparison is the
+   behavioural half of moderation that logging alone misses (PRD 4).';
+
+create table if not exists public.day_closes (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid        not null references auth.users (id) on delete cascade,
+  close_date date        not null,
+  drinks     numeric(5, 2) not null default 0 check (drinks >= 0),
+  repaired   boolean     not null default false,
+  closed_at  timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique (user_id, close_date)
+);
+
+comment on table public.day_closes is
+  'One row per day the user confirmed. Presence is what the day streak counts,
+   which is why a day can also be closed by a streak repair.';
+
+comment on column public.day_closes.repaired is
+  'True when this row came from a streak repair rather than the user closing
+   the day. Repairs are limited to one per week, counted by `closed_at`.';
+
+comment on column public.day_closes.drinks is
+  'The count as confirmed at close time. Kept alongside the logs so a later
+   edit cannot silently rewrite what the user actually agreed to.';
+
+create table if not exists public.milestones (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid        not null references auth.users (id) on delete cascade,
+  kind        text        not null check (kind in ('day_streak', 'urges_survived')),
+  threshold   integer     not null check (threshold > 0),
+  achieved_at timestamptz not null default now(),
+  created_at  timestamptz not null default now(),
+  unique (user_id, kind, threshold)
+);
+
+comment on table public.milestones is
+  'A row exists once a milestone has been celebrated. The celebration is a
+   full screen the user cannot dismiss by accident, so it must fire exactly
+   once — the unique constraint, not the client, is what guarantees that.';
+
 -- ---------------------------------------------------------------------------
 -- 2. Row Level Security
 -- ---------------------------------------------------------------------------
@@ -103,6 +172,9 @@ alter table public.drink_logs            enable row level security;
 alter table public.urge_logs             enable row level security;
 alter table public.lesson_progress       enable row level security;
 alter table public.challenge_memberships enable row level security;
+alter table public.evening_plans         enable row level security;
+alter table public.day_closes            enable row level security;
+alter table public.milestones            enable row level security;
 
 -- profiles is keyed on `id` (which IS the auth user id), not `user_id`.
 
@@ -131,7 +203,9 @@ do $policies$
 declare
   t text;
 begin
-  foreach t in array array['drink_logs', 'urge_logs', 'lesson_progress', 'challenge_memberships']
+  foreach t in array array['drink_logs', 'urge_logs', 'lesson_progress',
+                          'challenge_memberships', 'evening_plans', 'day_closes',
+                          'milestones']
   loop
     execute format('drop policy if exists %I on public.%I', t || '_select_own', t);
     execute format(
@@ -195,6 +269,11 @@ $touch_updated_at$;
 drop trigger if exists profiles_touch_updated_at on public.profiles;
 create trigger profiles_touch_updated_at
   before update on public.profiles
+  for each row execute function public.touch_updated_at();
+
+drop trigger if exists evening_plans_touch_updated_at on public.evening_plans;
+create trigger evening_plans_touch_updated_at
+  before update on public.evening_plans
   for each row execute function public.touch_updated_at();
 
 -- ---------------------------------------------------------------------------

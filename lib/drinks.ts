@@ -5,9 +5,35 @@
  * stays layout. Nothing in this file imports React.
  */
 
-import type { DrinkLog, DrinkType, Profile, UrgeOutcome } from '@/lib/database.types';
+import type {
+  DateKey,
+  DayClose,
+  DrinkLog,
+  DrinkType,
+  EveningPlan,
+  Milestone,
+  Profile,
+  UrgeOutcome,
+} from '@/lib/database.types';
+import {
+  BACKFILL_DAYS_BACK,
+  dayStreakFrom,
+  loadDayContext,
+  repairsUsedIn,
+  streakRescueFrom,
+  type StreakRescue,
+} from '@/lib/days';
 import { supabase } from '@/lib/supabase';
-import { daysBetween, deviceTimeZone, weekRange, type WeekRange } from '@/lib/week';
+import {
+  daysBetween,
+  deviceTimeZone,
+  instantForLocalTime,
+  localDateKey,
+  shiftDateKey,
+  weekRange,
+  zonedParts,
+  type WeekRange,
+} from '@/lib/week';
 
 /**
  * How far back the streak count and the "usual drinks" list look.
@@ -56,7 +82,27 @@ export type WeekSnapshot = {
   quickTypes: DrinkType[];
   /** Whole days since the account was created, for the lesson day. */
   daysSinceJoining: number;
+
+  /** Today, in the user's own zone. Every day surface is keyed on this. */
+  todayKey: DateKey;
+  /** Drinks logged today. */
+  todayDrinks: number;
+  /** Drinks logged per local day, for the days the close flow can still reach. */
+  drinksByDay: Record<DateKey, number>;
+  /** Tonight's plan, if one has been made. */
+  plan: EveningPlan | null;
+  /** Today's close, if the day has already been confirmed. */
+  todayClose: DayCloseRow | null;
+  /** Consecutive closed days, counting back from today. */
+  streakDays: number;
+  /** The one day that could still be rescued, and how — see `streakRescueFrom`. */
+  rescue: StreakRescue | null;
+  /** Milestones already celebrated, so none of them fires twice. */
+  celebrated: Pick<Milestone, 'kind' | 'threshold'>[];
 };
+
+/** The slice of `day_closes` any screen actually reads. */
+export type DayCloseRow = Pick<DayClose, 'close_date' | 'drinks' | 'repaired' | 'closed_at'>;
 
 export type LoadResult<T> = { ok: true; value: T } | { ok: false; message: string };
 
@@ -168,13 +214,21 @@ export function quickTypesFrom(logs: Pick<DrinkLog, 'drink_type'>[]): DrinkType[
  * Finished weeks, counting back from last week, that came in at or under the
  * number.
  *
- * Two honest limitations, both fine for a v1: past weeks are scored against
- * the *current* target, because no history of the target is kept yet; and a
- * week that started before the account did is never counted, so a new account
- * cannot inherit a streak from empty history.
+ * A week only counts if the user was **there** for it — at least one drink
+ * logged, or at least one day closed. Without that test an empty week reads as
+ * "zero drinks, comfortably under the number" and a streak grows fastest for
+ * someone who stopped opening the app, which is the opposite of what the number
+ * is meant to mean. An alcohol-free week and an abandoned week are identical in
+ * the drink logs and always were; `day_closes` is the evidence that finally
+ * tells them apart, so a genuinely dry week still counts as long as its days
+ * were closed.
+ *
+ * One honest limitation remains: past weeks are scored against the *current*
+ * target, because no history of the target is kept yet.
  */
 export function streakFrom(
   logs: Pick<DrinkLog, 'logged_at' | 'quantity'>[],
+  closes: Pick<DayClose, 'close_date'>[],
   options: { now: Date; timeZone: string; target: number; joinedAt: Date }
 ): number {
   const { now, timeZone, target, joinedAt } = options;
@@ -184,14 +238,22 @@ export function streakFrom(
     const week = weekRange(now, timeZone, weeksAgo);
     if (week.start.getTime() < joinedAt.getTime()) break;
 
-    const drinks = sumQuantity(
-      logs.filter((log) => {
-        const at = new Date(log.logged_at).getTime();
-        return at >= week.start.getTime() && at < week.end.getTime();
-      })
+    const weekLogs = logs.filter((log) => {
+      const at = new Date(log.logged_at).getTime();
+      return at >= week.start.getTime() && at < week.end.getTime();
+    });
+
+    // Date keys are zero-padded, so comparing them as strings is the same
+    // comparison as comparing the dates — and avoids inventing an instant for
+    // a column that deliberately has none.
+    const startKey = localDateKey(week.start, timeZone);
+    const endKey = localDateKey(week.end, timeZone);
+    const weekCloses = closes.filter(
+      (close) => close.close_date >= startKey && close.close_date < endKey
     );
 
-    if (drinks > target) break;
+    if (weekLogs.length === 0 && weekCloses.length === 0) break;
+    if (sumQuantity(weekLogs) > target) break;
     streak += 1;
   }
 
@@ -233,7 +295,11 @@ export async function loadWeekSnapshot(): Promise<LoadResult<WeekSnapshot>> {
   const week = weekRange(now, timeZone);
   const historyStart = weekRange(now, timeZone, HISTORY_WEEKS).start;
 
-  const [logsResult, urgesResult] = await Promise.all([
+  const todayKey = localDateKey(now, timeZone);
+
+  // Everything the screen needs, in one round of parallel reads. Today is the
+  // screen that must never feel like it is thinking.
+  const [logsResult, urgesResult, dayContext, milestonesResult] = await Promise.all([
     supabase
       .from('drink_logs')
       .select('id, logged_at, drink_type, quantity')
@@ -244,6 +310,8 @@ export async function loadWeekSnapshot(): Promise<LoadResult<WeekSnapshot>> {
       .from('urge_logs')
       .select('id', { count: 'exact', head: true })
       .eq('outcome', 'survived'),
+    loadDayContext(userId, todayKey),
+    supabase.from('milestones').select('kind, threshold'),
   ]);
 
   if (logsResult.error) {
@@ -255,6 +323,12 @@ export async function loadWeekSnapshot(): Promise<LoadResult<WeekSnapshot>> {
   const drinks = sumQuantity(thisWeek);
   const joinedAt = new Date(profile.created_at);
 
+  const drinksByDay = drinksByDayFrom(logs, timeZone);
+  const closes = dayContext?.closes ?? [];
+  const closedKeys = new Set(closes.map((close) => close.close_date));
+  const joinedKey = localDateKey(joinedAt, timeZone);
+  const repairsUsed = repairsUsedIn(closes, week);
+
   return {
     ok: true,
     value: {
@@ -263,13 +337,42 @@ export async function loadWeekSnapshot(): Promise<LoadResult<WeekSnapshot>> {
       timeZone,
       drinks,
       daysLeft: week.daysLeft,
-      streakWeeks: streakFrom(logs, { now, timeZone, target: profile.weekly_target, joinedAt }),
+      streakWeeks: streakFrom(logs, closes, {
+        now,
+        timeZone,
+        target: profile.weekly_target,
+        joinedAt,
+      }),
       urgesSurvived: urgesResult.count ?? 0,
       moneySaved: moneySaved(profile.baseline_drinks, drinks, Number(profile.drink_cost)),
       quickTypes: quickTypesFrom(logs),
       daysSinceJoining: daysBetween(joinedAt, now, timeZone),
+
+      todayKey,
+      todayDrinks: drinksByDay[todayKey] ?? 0,
+      drinksByDay,
+      plan: dayContext?.plan ?? null,
+      todayClose: closes.find((close) => close.close_date === todayKey) ?? null,
+      streakDays: dayStreakFrom(closedKeys, { todayKey, joinedKey }),
+      rescue: streakRescueFrom(closedKeys, { todayKey, joinedKey, repairsUsed }),
+      celebrated: milestonesResult.data ?? [],
     },
   };
+}
+
+/** Totals per local calendar day, which is the unit the evening ritual counts in. */
+export function drinksByDayFrom(
+  logs: Pick<DrinkLog, 'logged_at' | 'quantity'>[],
+  timeZone: string
+): Record<DateKey, number> {
+  const totals: Record<DateKey, number> = {};
+
+  for (const log of logs) {
+    const key = localDateKey(new Date(log.logged_at), timeZone);
+    totals[key] = (totals[key] ?? 0) + Number(log.quantity);
+  }
+
+  return totals;
 }
 
 export type WriteResult = { ok: true } | { ok: false; message: string };
@@ -281,19 +384,97 @@ export type WriteResult = { ok: true } | { ok: false; message: string };
  * the row lands in the week the user is actually looking at, rather than in
  * whichever week the server's clock is in a second either side of midnight.
  */
-export async function logDrink(drinkType: DrinkType, quantity = 1): Promise<WriteResult> {
+export async function logDrink(
+  drinkType: DrinkType,
+  quantity = 1,
+  loggedAt: Date = new Date()
+): Promise<WriteResult> {
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return { ok: false, message: 'You need to be signed in to log a drink.' };
 
   const { error } = await supabase.from('drink_logs').insert({
     user_id: userData.user.id,
-    logged_at: new Date().toISOString(),
+    logged_at: loggedAt.toISOString(),
     drink_type: drinkType,
     quantity,
   });
 
   if (error) return { ok: false, message: 'That did not save. Try again.' };
   return { ok: true };
+}
+
+/**
+ * Changes what an entry was.
+ *
+ * Only the type: a quantity control would be a second decision on a screen
+ * whose whole point is that logging never became a form. Getting it wrong twice
+ * is what delete is for.
+ */
+export async function updateDrinkLog(id: string, drinkType: DrinkType): Promise<WriteResult> {
+  const { error } = await supabase
+    .from('drink_logs')
+    .update({ drink_type: drinkType })
+    .eq('id', id);
+
+  if (error) return { ok: false, message: 'That change did not save. Try again.' };
+  return { ok: true };
+}
+
+/**
+ * Removes an entry outright.
+ *
+ * There is no soft delete and no undo. A tracker the user cannot correct is a
+ * tracker they stop trusting, and a correction that leaves a ghost row behind
+ * is not a correction.
+ */
+export async function deleteDrinkLog(id: string): Promise<WriteResult> {
+  const { error } = await supabase.from('drink_logs').delete().eq('id', id);
+
+  if (error) return { ok: false, message: 'That did not delete. Try again.' };
+  return { ok: true };
+}
+
+/** One entry as the edit screen lists it. */
+export type DrinkEntry = Pick<DrinkLog, 'id' | 'logged_at' | 'drink_type' | 'quantity'>;
+
+/**
+ * The entries a user is still allowed to correct — today and yesterday, newest
+ * first.
+ *
+ * Read from local midnight rather than a rolling 48 hours, so the screen shows
+ * whole days. See `BACKFILL_DAYS_BACK` for why that is the same promise.
+ */
+export async function loadEditableEntries(): Promise<LoadResult<DrinkEntry[]>> {
+  const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) return { ok: false, message: 'You need to be signed in.' };
+
+  const timeZone = deviceTimeZone();
+  const todayKey = localDateKey(new Date(), timeZone);
+  const from = instantForLocalTime(shiftDateKey(todayKey, -BACKFILL_DAYS_BACK), timeZone, 0);
+
+  const { data, error } = await supabase
+    .from('drink_logs')
+    .select('id, logged_at, drink_type, quantity')
+    .gte('logged_at', from.toISOString())
+    .order('logged_at', { ascending: false });
+
+  if (error) return { ok: false, message: 'Could not load your entries. Try again.' };
+  return { ok: true, value: data ?? [] };
+}
+
+/**
+ * When a backfilled drink is recorded as having happened.
+ *
+ * The same clock time as now, on the chosen day. Nobody remembers whether it
+ * was ten past nine, and asking would break the rule that logging never types —
+ * so the app picks a time that is certainly inside the right day and inside the
+ * right week, and does not pretend to more precision than the user has.
+ */
+export function backfillInstant(dateKey: DateKey, timeZone: string, now = new Date()): Date {
+  if (dateKey === localDateKey(now, timeZone)) return now;
+
+  const parts = zonedParts(now, timeZone);
+  return instantForLocalTime(dateKey, timeZone, parts.hour, parts.minute);
 }
 
 /** The column caps the note at 500 characters; trim rather than let it fail. */

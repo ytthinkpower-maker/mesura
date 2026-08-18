@@ -188,3 +188,100 @@ export function formatLongDate(instant: Date, timeZone: string): string {
     return instant.toDateString();
   }
 }
+
+/**
+ * A calendar day in one zone, as `YYYY-MM-DD`.
+ *
+ * This is the key `evening_plans.plan_date` and `day_closes.close_date` are
+ * written against. A day is a thing people have opinions about — "last night",
+ * "yesterday" — and those opinions are about a wall clock, not an instant.
+ */
+export function localDateKey(instant: Date, timeZone: string): string {
+  const parts = zonedParts(instant, timeZone);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
+}
+
+/**
+ * Moves a date key by whole calendar days.
+ *
+ * Pure arithmetic on the key, done in UTC so no zone is involved: adding a day
+ * to "the 30th" must give "the 31st" whatever the clocks did that night.
+ */
+export function shiftDateKey(dateKey: string, days: number): string {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day) + days * MS_PER_DAY);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`;
+}
+
+/** Whole calendar days from one date key to another. Negative if `to` is earlier. */
+export function daysBetweenKeys(from: string, to: string): number {
+  const parse = (key: string) => {
+    const [year, month, day] = key.split('-').map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  return Math.round((parse(to) - parse(from)) / MS_PER_DAY);
+}
+
+/**
+ * The instant of a wall-clock time on a given local day.
+ *
+ * Backfilling needs this: "yesterday, at the time it is now" has to land in
+ * yesterday's local day and yesterday's week, whatever the offset did between
+ * then and now.
+ */
+export function instantForLocalTime(
+  dateKey: string,
+  timeZone: string,
+  hour: number,
+  minute = 0
+): Date {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const midnight = instantOfLocalMidnight(year, month, day, timeZone);
+  // Re-solved rather than added to midnight, so a day that gains or loses an
+  // hour still puts 20:00 at 20:00.
+  const wallClock = Date.UTC(year, month - 1, day, hour, minute, 0);
+  let instant = midnight.getTime();
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    instant = wallClock - zoneOffsetMs(new Date(instant), timeZone);
+  }
+
+  return new Date(instant);
+}
+
+/**
+ * "Today", "Yesterday", or the weekday name — what a person calls a day when
+ * it is recent enough to still be talking about.
+ *
+ * Takes no zone: a `DateKey` is already local, so the only safe way to read a
+ * weekday off it is to treat it as a UTC date and never convert.
+ */
+export function formatDayKey(dateKey: string, todayKey: string): string {
+  const delta = daysBetweenKeys(dateKey, todayKey);
+  if (delta === 0) return 'Today';
+  if (delta === 1) return 'Yesterday';
+
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const noon = new Date(Date.UTC(year, month - 1, day, 12));
+
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', weekday: 'long' }).format(noon);
+  } catch {
+    return WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  }
+}
+
+/** "9:40 pm" — the time on an entry row, in the user's own zone. */
+export function formatTime(instant: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone,
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(instant);
+  } catch {
+    return instant.toISOString().slice(11, 16);
+  }
+}

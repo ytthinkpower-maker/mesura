@@ -3,10 +3,13 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { AuthProvider, useAuth } from '@/components/auth-provider';
 import { BrandColor } from '@/constants/brand';
+import { configureNotificationHandler } from '@/lib/reminders';
 
 /** Mesura is never dark-dominant, so there is exactly one navigation theme. */
 const MesuraTheme: Theme = {
@@ -29,6 +32,13 @@ const MesuraTheme: Theme = {
  * product promises never to do.
  */
 void SplashScreen.preventAutoHideAsync();
+
+/**
+ * Set before anything can be delivered. The evening nudge is allowed to show
+ * while the app is open — it is the same nudge either way — and is never
+ * allowed to make a sound.
+ */
+configureNotificationHandler();
 
 function SplashGate() {
   const { initializing } = useAuth();
@@ -62,6 +72,17 @@ function RootNavigator() {
           name="urge"
           options={{ headerShown: false, presentation: 'fullScreenModal' }}
         />
+        {/*
+          A milestone covers everything too: it is the one screen the user did
+          not ask for, so it had better be worth the whole display.
+        */}
+        <Stack.Screen
+          name="milestone"
+          options={{ headerShown: false, presentation: 'fullScreenModal' }}
+        />
+        {/* Corrections and the developer menu are errands — a sheet each. */}
+        <Stack.Screen name="entries" options={{ headerShown: false, presentation: 'modal' }} />
+        <Stack.Screen name="dev-menu" options={{ headerShown: false, presentation: 'modal' }} />
       </Stack.Protected>
 
       <Stack.Protected guard={!signedIn}>
@@ -73,12 +94,26 @@ function RootNavigator() {
 
 export default function RootLayout() {
   return (
-    <ThemeProvider value={MesuraTheme}>
-      <AuthProvider>
-        <SplashGate />
-        <RootNavigator />
-      </AuthProvider>
-      <StatusBar style="dark" />
-    </ThemeProvider>
+    /*
+      Gesture handler needs a root of its own, above everything that might use
+      one. Nothing did until the entry list learned to swipe; without this the
+      swipe silently does nothing rather than failing loudly.
+    */
+    <GestureHandlerRootView style={styles.root}>
+      <ThemeProvider value={MesuraTheme}>
+        <AuthProvider>
+          <SplashGate />
+          <RootNavigator />
+        </AuthProvider>
+        <StatusBar style="dark" />
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: BrandColor.paper,
+  },
+});

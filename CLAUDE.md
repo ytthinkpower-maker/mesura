@@ -36,6 +36,7 @@ install` is out of scope. Before adding any dependency, run
 | Language   | TypeScript (strict)                                          |
 | Navigation | Expo Router 6 (file-based), bottom tabs                      |
 | Drawing    | `react-native-svg` 15.12.1 (the version inside Expo Go 54)   |
+| Notifying  | `expo-notifications` 0.32.17 — **local** notifications only  |
 | Linting    | ESLint 9 (`eslint-config-expo`) + Prettier, wired together   |
 | Target     | Expo Go on iPhone. SDK 54 only.                              |
 
@@ -85,7 +86,9 @@ components/   Reusable UI. Presentational, brand-token-driven. React context
 lib/          Framework-free logic. No JSX, no React. `supabase.ts` is the one
               place the client is constructed; everything else imports it from
               there. `week.ts` owns every date boundary, `drinks.ts` everything
-              the Today screen derives.
+              the Today screen derives, `days.ts` the plan/close/streak rules,
+              `milestones.ts` the two celebration ladders, `reminders.ts` the
+              evening notification, and `dev.ts` the hidden testing menu.
 supabase/     Database schema and policies as SQL. Run by hand in the Supabase
               SQL editor — there is no migration runner in this project.
 content/      Authored copy: lessons, challenges, onboarding strings. Data only.
@@ -174,6 +177,10 @@ Type tokens: `numeric` (48, reserved for the weekly number) · `display` (32) ·
 | `LogDrinkSheet`     | `components/log-drink-sheet.tsx`    | `Sheet` + `DrinkTypePicker`. One tap logs and the sheet closes itself                                                    |
 | `DrinkTypePicker`   | `components/drink-type-picker.tsx`  | Three one-tap types + "Something else". Shared by the log sheet and Urge SOS so logging is one gesture everywhere        |
 | `BreathingCircle`   | `components/breathing-circle.tsx`   | 4s in / 4s hold / 6s out. Takes `phase` from its parent — one clock drives the circle, the label, and the countdown      |
+| `CountPicker`       | `components/count-picker.tsx`       | A row of numbers, one tap each. Same rule as the drink picker: no stepper, no keyboard, no confirm                       |
+| `PlanTonightSheet`  | `components/plan-tonight-sheet.tsx` | `Sheet` + `CountPicker`. Open, choose — two taps and the evening is decided                                              |
+| `CloseDaySheet`     | `components/close-day-sheet.tsx`    | The evening ritual. Shows the count, never asks for it. A zero holds briefly in spruce before the sheet leaves           |
+| `MilestoneCard`     | `components/milestone-card.tsx`     | The shareable image, drawn in SVG. Exposes `toPngBase64()`. Contains only the number, the ring, and the wordmark         |
 
 ---
 
@@ -183,17 +190,20 @@ Five tabs, defined in `app/(tabs)/`:
 
 | Tab       | Route           | Purpose                                                 |
 | --------- | --------------- | ------------------------------------------------------- |
-| Today     | `index.tsx`     | Log drinks and urges, see the weekly ring. **Real**     |
+| Today     | `index.tsx`     | The whole loop: ring, logging, urges, tonight. **Real** |
 | History   | `history.tsx`   | Past weeks: set, drank, won. _Placeholder_              |
 | Lessons   | `lessons.tsx`   | Short reads, serif body. _Placeholder + sample_         |
 | Challenge | `challenge.tsx` | Commit to a number, build a streak. _Placeholder_       |
-| Settings  | `settings.tsx`  | Account, export, delete. **Real.** Limits still pending |
+| Settings  | `settings.tsx`  | Account, evening check-in, export, delete. **Real**     |
 
 One route lives outside the tabs:
 
-| Route   | File           | Purpose                                                         |
-| ------- | -------------- | --------------------------------------------------------------- |
-| `/urge` | `app/urge.tsx` | Urge SOS, a `fullScreenModal` presented over the tabs. **Real** |
+| Route        | File                | Purpose                                                                    |
+| ------------ | ------------------- | -------------------------------------------------------------------------- |
+| `/urge`      | `app/urge.tsx`      | Urge SOS, a `fullScreenModal` presented over the tabs. **Real**            |
+| `/milestone` | `app/milestone.tsx` | A milestone celebration, `fullScreenModal`. Share exports a branded PNG    |
+| `/entries`   | `app/entries.tsx`   | Correcting the record: add, retype, or delete today's and yesterday's logs |
+| `/dev-menu`  | `app/dev-menu.tsx`  | Hidden testing menu. Development builds only — see below                   |
 
 ### Urge SOS
 
@@ -229,13 +239,86 @@ The rules Today is built on live in [`lib/week.ts`](lib/week.ts) and
   question has not been asked yet, and the counter stays at zero rather than
   inventing a saving.
 - **The streak counts finished weeks at or under the number** — never the
-  current one, and never a week that started before the account did.
+  current one, never a week that started before the account did, and never a
+  week the user was absent for. An empty week otherwise reads as "zero drinks,
+  comfortably under", so the streak would grow fastest for someone who stopped
+  opening the app. A week counts only with a drink logged or a day closed in
+  it, which is also what lets a genuinely alcohol-free week still count.
 - **Logging is one tap and never types.** The sheet offers the three types this
   user actually logs; the ring moves before the insert comes back, and rolls
   back if it fails.
 
 Weekly target, baseline, and drink cost still have no UI. Set them with
 [`supabase/seed-dev.sql`](supabase/seed-dev.sql) until onboarding lands.
+
+### The day
+
+Weeks are what Mesura scores; days are what the user lives through, and they are
+the only thing a nightly ritual can be about. Everything in this section lives in
+[`lib/days.ts`](lib/days.ts) and is keyed on a `DateKey` — `YYYY-MM-DD` in the
+user's own zone — never on an instant, because "yesterday" is a wall-clock idea.
+
+- **Plan tonight** is two taps from Today: open, choose a number. Afterwards the
+  card compares plan against actual. Meeting it says **"Stuck to your plan"** in
+  spruce. Missing it shows the two numbers and **nothing else** — the silence is
+  the design, and any sentence added there would be the app having an opinion
+  about a grown adult's evening.
+- **Close the day** is one tap from Today, or one tap from the ~8pm nudge. The
+  count is shown, never asked for — asking would imply the app did not trust the
+  logging. A zero holds the sheet open briefly in spruce and then leaves.
+- **The day streak counts closed days**, not zero-drink days. Today not being
+  closed yet is never a break — the count starts at today when today is closed
+  and at yesterday when it is not, which is what stops the streak from appearing
+  to die every morning.
+- **Milestones fire once**, at 7/14/30/60/100 days closed in a row and 5/25/50/100
+  urges ridden out. The `milestones` table is what guarantees "once"; the client
+  only decides which one is worth stopping for when several land together.
+
+### Streak fairness
+
+A streak that dies because someone fell asleep is the top rage-uninstall driver
+in this category, so it is designed against on purpose. There are exactly two
+mechanics and they are deliberately different:
+
+- **Backfill and editing** cover **today and yesterday** — the PRD's 48-hour
+  window, expressed in whole local days because that is a boundary a person can
+  see. Inside it a day can be closed late, a forgotten drink added, an entry
+  retyped, or an entry deleted, all unlimited. You remember last night, so you
+  are trusted to say what happened.
+- **Streak repair** covers everything older, **one per week**, counted by
+  `closed_at` over the same Sunday-to-Saturday week. Nobody's memory is good
+  enough three days out, so a repair does not pretend to reconstruct the day —
+  it says so, and it is rationed.
+
+Today shows at most one of these at a time, as a card naming the day rather than
+the number: the point is the honest record, not the streak.
+
+### The evening nudge
+
+A **local** notification at 20:00, scheduled on the device by
+`expo-notifications`. Nothing is sent from a server and no push token is ever
+registered — which is both what keeps it working inside Expo Go and what keeps
+the paywall's promise: push only, no SMS, nothing needing our servers to know
+what time it is where you live.
+
+The preference is `profiles.evening_reminder` so it survives a reinstall; the
+schedule is per device, so [`lib/reminders.ts`](lib/reminders.ts) reconciles the
+two on every load of Today. `setEveningReminder` writes both together — a stored
+`true` with nothing scheduled is a promise the app quietly failed to keep.
+
+### The developer menu
+
+Ten taps on the version number in Settings opens `/dev-menu`. It can simulate a
+streak of any milestone length, override which lesson day Today shows, forget
+celebrated milestones so a celebration can be seen twice, and fire tonight's
+nudge in five seconds.
+
+**It is gated on `__DEV__`** ([`lib/dev.ts`](lib/dev.ts)) and therefore cannot
+exist in a release build. Everything it does writes invented rows into a real
+account; a menu that can do that to a paying customer is a bug report waiting to
+be filed, however well hidden the gesture is. The notification button goes
+through the same enabled check the real schedule does, so "off in Settings"
+means off there too.
 
 ---
 
@@ -248,7 +331,11 @@ secrecy. The `service_role` key must never enter this repo.
 - Schema, policies, and the account-deletion function live in
   [`supabase/schema.sql`](supabase/schema.sql). It is idempotent: paste the
   whole file into the Supabase SQL editor and run it. When you change a table,
-  change [`lib/database.types.ts`](lib/database.types.ts) in the same commit.
+  change [`lib/database.types.ts`](lib/database.types.ts) in the same commit —
+  and add it to `USER_TABLES` there, or the data export will silently omit it.
+  `evening_plans`, `day_closes`, and `milestones` arrived after the first
+  release of that file, so **re-run it against `mesura-dev`** before the Today
+  screen will load.
 - **Recovery uses one-time codes, not emailed links.** A link has to travel
   from Mail back into the app through a deep link, which is the most common way
   a recovery flow strands someone — and account recovery is a headline feature.

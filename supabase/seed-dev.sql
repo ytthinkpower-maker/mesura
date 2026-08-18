@@ -15,7 +15,7 @@ set
   goal_mode       = 'cut_back',
   weekly_target   = 8,   -- the number the ring is drawn against
   baseline_drinks = 10,  -- a normal week before Mesura; powers "money saved"
-  drink_cost      = 8.00; -- one drink, in whatever currency the user pays in
+  drink_cost      = 12.00; -- one drink, in whatever currency the user pays in
 
 -- `timezone` is left alone: the app writes the device's IANA zone on load,
 -- which is both more reliable than guessing here and a useful tell — the row
